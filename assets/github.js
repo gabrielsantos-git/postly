@@ -207,8 +207,17 @@ export function createGitHub({ owner, repo, token, apiBase = 'https://api.github
     },
 
     // Dispara o workflow do publicador.
-    async runWorkflow(inputs = {}) {
-      await request('POST', `${base}/actions/workflows/publish.yml/dispatches`, { ref: await getBranch(), inputs });
+    async runWorkflow(inputs = {}, file = 'publish.yml') {
+      await request('POST', `${base}/actions/workflows/${file}/dispatches`, { ref: await getBranch(), inputs });
+    },
+
+    // Pede um novo deploy do site no GitHub Pages (para as mídias novas ficarem acessíveis).
+    async deploySite() {
+      try {
+        await this.runWorkflow({}, 'pages.yml');
+      } catch {
+        // o push do commit também dispara o deploy
+      }
     },
 
     async latestRuns(n = 5) {

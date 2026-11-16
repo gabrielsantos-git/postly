@@ -176,13 +176,36 @@ function cleanup(posts) {
   return changed;
 }
 
+// Pede um novo deploy do site (workflow pages.yml) — no máximo uma vez por execução.
+let deployRequested = false;
+async function requestPagesDeploy() {
+  if (deployRequested || !process.env.GITHUB_TOKEN || !process.env.GITHUB_REPOSITORY) return;
+  deployRequested = true;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/actions/workflows/pages.yml/dispatches`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+        accept: 'application/vnd.github+json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ ref: process.env.GITHUB_REF_NAME || 'main' }),
+    });
+    console.log(res.ok ? '[pages] novo deploy do site solicitado' : `[pages] não foi possível pedir o deploy (${res.status})`);
+  } catch (err) {
+    console.warn('[pages] falha ao pedir deploy:', err.message);
+  }
+}
+
 async function isMediaReady(m) {
   try {
     const res = await fetch(mediaUrl(m), { method: 'HEAD', cache: 'no-store' });
-    return res.ok;
+    if (res.ok) return true;
   } catch {
-    return false;
+    // trata como indisponível
   }
+  await requestPagesDeploy();
+  return false;
 }
 
 // ---------------------------------------------------------------- publicar

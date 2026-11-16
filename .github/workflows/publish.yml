@@ -25,6 +25,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write # para pedir um novo deploy do site quando uma mídia ainda não estiver no ar
 
 jobs:
   publish:
@@ -53,3 +54,4 @@ jobs:
           POSTLY_GH_TOKEN: ${{ secrets.POSTLY_GH_TOKEN }}
           POSTLY_PUBLIC_URL: ${{ vars.POSTLY_PUBLIC_URL }}
           CONNECT_SECRET: ${{ inputs.secret }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -192,6 +192,7 @@ async function savePosts({ editingId, accountIds, type, caption, media, shareToF
     }
     return changes;
   });
+  if (newMedia.length) await gh.deploySite();
   if (status === 'scheduled' && dueSoon(scheduledAt)) await triggerPublisher();
 }
 

@@ -28,8 +28,8 @@ Próxima etapa: integração com um número do [WhatsApp Business](https://devel
 ## Configuração (uma vez só)
 
 ### 1. GitHub Pages
-Em **Settings › Pages**: *Source* = **Deploy from a branch**, escolha a branch principal do repositório e a pasta **/ (root)**.
-O site fica em `https://SEU-USUARIO.github.io/postly/`.
+Em **Settings › Pages › Build and deployment**, escolha *Source* = **GitHub Actions**.
+O site é publicado pelo workflow `.github/workflows/pages.yml` a cada alteração e fica em `https://SEU-USUARIO.github.io/postly/`.
 
 ### 2. GitHub Actions
 Em **Settings › Actions › General**, deixe as Actions permitidas. Se a aba **Actions** pedir para ativar os workflows, ative.
@@ -75,6 +75,7 @@ scripts/
   lib/instagram.mjs           chamadas à API do Instagram
   lib/publisher.mjs           máquina de estados da publicação
 .github/workflows/publish.yml agenda do publicador
+.github/workflows/pages.yml   publica o site e as mídias no GitHub Pages
 data/                         posts, mídias e contas (gravados pelo site e pelo publicador)
 test/                         testes (API do Instagram simulada)
 ```
