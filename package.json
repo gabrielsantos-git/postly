@@ -1,22 +1,17 @@
 {
   "name": "postly",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Agendador de publicações para Instagram (feed, carrossel, reels e stories) via API oficial da Meta.",
+  "description": "Agendador de publicações para Instagram que roda no GitHub Pages + GitHub Actions.",
   "type": "module",
-  "main": "src/server.js",
   "engines": {
-    "node": ">=20.6"
+    "node": ">=20"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "test": "node --test test/*.test.js"
+    "publish-due": "node scripts/publish.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "better-sqlite3": "^12.4.1",
-    "express": "^5.1.0",
-    "multer": "^2.0.2",
-    "sharp": "^0.34.4"
+    "libsodium-wrappers": "0.7.16"
   }
 }
