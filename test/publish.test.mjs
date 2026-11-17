@@ -102,7 +102,7 @@ test('publica uma foto no feed', async () => {
   assert.equal(post.permalink, 'https://www.instagram.com/p/ABC/');
   const [create] = creates();
   assert.equal(create.host, 'graph.instagram.com');
-  assert.equal(create.path, '/v24.0/17841400000000001/media');
+  assert.equal(create.path, '/v27.0/17841400000000001/media');
   assert.match(create.params.image_url, /^https:\/\/gabriel-santos\.github\.io\/postly\/data\/media\/i\d+\.jpg$/);
   assert.equal(create.params.caption, 'Promoção de hoje! #oferta');
   assert.equal(create.params.access_token, 'TOKEN-ABC');

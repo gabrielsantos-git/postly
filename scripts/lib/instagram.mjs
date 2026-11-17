@@ -31,7 +31,7 @@ export class GraphApiError extends Error {
   }
 }
 
-export function createInstagramClient({ apiVersion = 'v24.0', host = 'https://graph.instagram.com' } = {}) {
+export function createInstagramClient({ apiVersion = 'v27.0', host = 'https://graph.instagram.com' } = {}) {
   const graph = (path) => `${host}/${apiVersion}/${path}`;
 
   async function request(url, { method = 'GET', params = {} } = {}) {

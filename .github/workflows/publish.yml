@@ -53,5 +53,8 @@ jobs:
           SECRETS_JSON: ${{ toJSON(secrets) }}
           POSTLY_GH_TOKEN: ${{ secrets.POSTLY_GH_TOKEN }}
           POSTLY_PUBLIC_URL: ${{ vars.POSTLY_PUBLIC_URL }}
+          # Versão da API da Meta. Para trocar sem mexer no código, crie a variável
+          # GRAPH_API_VERSION em Settings › Secrets and variables › Actions › Variables.
+          GRAPH_API_VERSION: ${{ vars.GRAPH_API_VERSION || 'v27.0' }}
           CONNECT_SECRET: ${{ inputs.secret }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

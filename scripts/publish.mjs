@@ -26,7 +26,7 @@ const NO_GIT = process.env.POSTLY_NO_GIT === '1';
 const DAY = 24 * 3600 * 1000;
 
 const secrets = JSON.parse(process.env.SECRETS_JSON || '{}');
-const ig = createInstagramClient({ apiVersion: process.env.GRAPH_API_VERSION || 'v24.0' });
+const ig = createInstagramClient({ apiVersion: process.env.GRAPH_API_VERSION || 'v27.0' });
 
 export function publicBaseUrl() {
   if (process.env.POSTLY_PUBLIC_URL) return process.env.POSTLY_PUBLIC_URL.replace(/\/+$/, '');
