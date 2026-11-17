@@ -10,6 +10,7 @@
 //   POSTLY_PUBLIC_URL    (opcional) URL do site no GitHub Pages, se for diferente da padrão
 //   RUN_BUDGET_SECONDS   (opcional) quanto tempo esta execução pode ficar esperando posts (padrão 540)
 //   POSTLY_NO_GIT=1      não faz git pull/commit/push (testes)
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -33,7 +34,8 @@ export function publicBaseUrl() {
   const host = `${owner.toLowerCase()}.github.io`;
   return repo.toLowerCase() === host ? `https://${host}` : `https://${host}/${repo}`;
 }
-const mediaUrl = (m) => `${publicBaseUrl()}/${m.path}`;
+// Mídias novas ficam no Vercel Blob (m.url); posts antigos usam arquivos do repositório no GitHub Pages.
+const mediaUrl = (m) => m.url || `${publicBaseUrl()}/${m.path}`;
 
 // ---------------------------------------------------------------- arquivos
 const readJson = (file, fallback) => {
@@ -102,7 +104,8 @@ async function updateRepoSecret(name, value) {
   const keyRes = await fetch(`https://api.github.com/repos/${repo}/actions/secrets/public-key`, { headers });
   if (!keyRes.ok) throw new Error(`GitHub: não foi possível ler a chave pública (${keyRes.status})`);
   const key = await keyRes.json();
-  const sodium = (await import('libsodium-wrappers')).default;
+  // A versão ESM do pacote está quebrada no Node; usa a CommonJS.
+  const sodium = createRequire(import.meta.url)('libsodium-wrappers');
   await sodium.ready;
   const sealed = sodium.crypto_box_seal(sodium.from_string(value), sodium.from_base64(key.key, sodium.base64_variants.ORIGINAL));
   const res = await fetch(`https://api.github.com/repos/${repo}/actions/secrets/${name}`, {
@@ -204,7 +207,7 @@ async function isMediaReady(m) {
   } catch {
     // trata como indisponível
   }
-  await requestPagesDeploy();
+  if (!m.url) await requestPagesDeploy();
   return false;
 }
 

@@ -12,6 +12,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@vercel/blob": "2.8.2",
     "libsodium-wrappers": "0.7.16"
   }
 }

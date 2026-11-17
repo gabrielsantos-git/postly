@@ -1,9 +1,10 @@
-// Acesso ao repositório pelo navegador, usando a API do GitHub com o token pessoal do usuário.
-// Os dados do Postly ficam no próprio repositório:
+// Acesso ao repositório a partir do navegador. As chamadas passam pela função /api/gh da Vercel,
+// que usa o token do GitHub guardado nas variáveis de ambiente (o navegador nunca vê o token).
+//
+// Os dados do Postly ficam no repositório:
 //   data/accounts.json        contas conectadas (sem tokens)
 //   data/posts/<id>.json      um arquivo por post
-//   data/media/<arquivo>      fotos e vídeos (servidos pelo GitHub Pages para o Instagram baixar)
-// Os tokens do Instagram ficam nos secrets do repositório (IG_TOKEN_...), nunca nos arquivos.
+// Fotos e vídeos ficam no Vercel Blob. Os tokens do Instagram ficam nos secrets do repositório.
 
 export class GitHubError extends Error {
   constructor(message, status) {
@@ -20,48 +21,38 @@ const b64encodeUtf8 = (str) => {
 };
 const b64decodeUtf8 = (b64) => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
 
-export function createGitHub({ owner, repo, token, apiBase = 'https://api.github.com' }) {
+export function createGitHub({ owner, repo, apiBase = '/api/gh' }) {
   let branch = null;
   const base = `/repos/${owner}/${repo}`;
-  const headers = () => ({
-    authorization: `Bearer ${token}`,
-    accept: 'application/vnd.github+json',
-    'x-github-api-version': '2022-11-28',
-  });
 
   async function request(method, path, body) {
     let res;
     try {
-      res = await fetch(apiBase + path, {
+      res = await fetch(`${apiBase}?path=${encodeURIComponent(path)}`, {
         method,
-        headers: { ...headers(), ...(body ? { 'content-type': 'application/json' } : {}) },
+        headers: { 'x-postly': '1', ...(body ? { 'content-type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
         cache: 'no-store',
+        credentials: 'same-origin',
       });
     } catch {
-      throw new GitHubError('Sem conexão com o GitHub.', 0);
+      throw new GitHubError('Sem conexão com o servidor.', 0);
     }
     if (res.status === 204) return null;
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const msg =
-        res.status === 401 ? 'Token do GitHub inválido ou expirado.'
-        : res.status === 403 || res.status === 404 ? `Sem permissão no repositório (${data.message || res.status}). Confira as permissões do token.`
-        : data.message || `Erro ${res.status} no GitHub`;
+        res.status === 401 ? 'Sua sessão expirou. Entre de novo.'
+        : res.status === 403 || res.status === 404 ? `Sem permissão no repositório (${data.message || res.status}). Confira as permissões do GITHUB_TOKEN na Vercel.`
+        : data.message || `Erro ${res.status}`;
       throw new GitHubError(msg, res.status);
     }
     return data;
   }
 
   async function graphql(query, variables) {
-    const res = await fetch(`${apiBase}/graphql`, {
-      method: 'POST',
-      headers: { ...headers(), 'content-type': 'application/json' },
-      body: JSON.stringify({ query, variables }),
-      cache: 'no-store',
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.errors) throw new GitHubError(data.errors?.[0]?.message || data.message || `Erro ${res.status}`, res.status);
+    const data = await request('POST', '/graphql', { query, variables });
+    if (data.errors) throw new GitHubError(data.errors[0]?.message || 'Erro no GitHub', 400);
     return data.data;
   }
 
@@ -77,11 +68,12 @@ export function createGitHub({ owner, repo, token, apiBase = 'https://api.github
       return branch;
     },
 
-    // Confere o token e as permissões. Retorna informações do repositório.
     async verify() {
       const info = await request('GET', base);
       branch = info.default_branch;
-      if (!info.permissions?.push) throw new GitHubError('O token não tem permissão de escrita neste repositório.', 403);
+      if (info.permissions && !info.permissions.push) {
+        throw new GitHubError('O GITHUB_TOKEN da Vercel não tem permissão de escrita neste repositório.', 403);
+      }
       return info;
     },
 
@@ -104,12 +96,13 @@ export function createGitHub({ owner, repo, token, apiBase = 'https://api.github
           return fb;
         }
       };
-      const accounts = parse(data.repository?.accounts?.text, []);
-      const posts = (data.repository?.posts?.entries || [])
-        .filter((e) => e.name.endsWith('.json'))
-        .map((e) => parse(e.object?.text, null))
-        .filter(Boolean);
-      return { accounts, posts };
+      return {
+        accounts: parse(data.repository?.accounts?.text, []),
+        posts: (data.repository?.posts?.entries || [])
+          .filter((e) => e.name.endsWith('.json'))
+          .map((e) => parse(e.object?.text, null))
+          .filter(Boolean),
+      };
     },
 
     async readJson(path, ref) {
@@ -122,32 +115,9 @@ export function createGitHub({ owner, repo, token, apiBase = 'https://api.github
       }
     },
 
-    // Envia um arquivo binário (base64) como blob do git, com progresso. Retorna o sha.
-    uploadBlob(base64, onProgress) {
-      return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', `${apiBase}${base}/git/blobs`);
-        for (const [k, v] of Object.entries(headers())) xhr.setRequestHeader(k, v);
-        xhr.setRequestHeader('content-type', 'application/json');
-        xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
-        xhr.onload = () => {
-          let data = {};
-          try {
-            data = JSON.parse(xhr.responseText);
-          } catch {
-            /* vazio */
-          }
-          if (xhr.status >= 200 && xhr.status < 300) resolve(data.sha);
-          else reject(new GitHubError(data.message || `Falha no envio (${xhr.status})`, xhr.status));
-        };
-        xhr.onerror = () => reject(new GitHubError('Falha de conexão no envio do arquivo.', 0));
-        xhr.send(JSON.stringify({ content: base64, encoding: 'base64' }));
-      });
-    },
-
     // Faz um commit com várias alterações. `build` recebe uma função para ler JSON na versão atual
-    // do repositório e devolve [{ path, json } | { path, sha } | { path, delete: true }].
-    // Se outra pessoa (ou o publicador) commitar no meio, tenta de novo com os dados atualizados.
+    // do repositório e devolve [{ path, json } | { path, delete: true }].
+    // Se o publicador commitar no meio, tenta de novo com os dados atualizados.
     async commit(message, build) {
       const b = await getBranch();
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -159,9 +129,9 @@ export function createGitHub({ owner, repo, token, apiBase = 'https://api.github
 
         const tree = [];
         for (const c of changes) {
-          if (c.delete) tree.push({ path: c.path, mode: '100644', type: 'blob', sha: null });
-          else if (c.sha) tree.push({ path: c.path, mode: '100644', type: 'blob', sha: c.sha });
-          else {
+          if (c.delete) {
+            tree.push({ path: c.path, mode: '100644', type: 'blob', sha: null });
+          } else {
             const blob = await request('POST', `${base}/git/blobs`, {
               content: b64encodeUtf8(`${JSON.stringify(c.json, null, 2)}\n`),
               encoding: 'base64',
@@ -207,17 +177,8 @@ export function createGitHub({ owner, repo, token, apiBase = 'https://api.github
     },
 
     // Dispara o workflow do publicador.
-    async runWorkflow(inputs = {}, file = 'publish.yml') {
-      await request('POST', `${base}/actions/workflows/${file}/dispatches`, { ref: await getBranch(), inputs });
-    },
-
-    // Pede um novo deploy do site no GitHub Pages (para as mídias novas ficarem acessíveis).
-    async deploySite() {
-      try {
-        await this.runWorkflow({}, 'pages.yml');
-      } catch {
-        // o push do commit também dispara o deploy
-      }
+    async runWorkflow(inputs = {}) {
+      await request('POST', `${base}/actions/workflows/publish.yml/dispatches`, { ref: await getBranch(), inputs });
     },
 
     async latestRuns(n = 5) {
@@ -227,14 +188,6 @@ export function createGitHub({ owner, repo, token, apiBase = 'https://api.github
       } catch (err) {
         if (err.status === 404) return null;
         throw err;
-      }
-    },
-
-    async pagesInfo() {
-      try {
-        return await request('GET', `${base}/pages`);
-      } catch {
-        return null;
       }
     },
   };

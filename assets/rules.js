@@ -11,8 +11,8 @@ export const LIMITS = {
   // Proporções aceitas no feed: de 4:5 (retrato) a 1.91:1 (paisagem).
   feedMinRatio: 4 / 5,
   feedMaxRatio: 1.91,
-  // Limite de arquivo da API de blobs do GitHub é 100 MB; deixamos margem.
-  videoMaxBytes: 95 * 1024 * 1024,
+  // Limite do Instagram para vídeos de Reels.
+  videoMaxBytes: 300 * 1024 * 1024,
 };
 
 export const STATUS_LABELS = {

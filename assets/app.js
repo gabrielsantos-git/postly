@@ -1,7 +1,6 @@
 // Postly — site estático (GitHub Pages). Os dados ficam no repositório e a publicação
 // é feita pelo GitHub Actions (.github/workflows/publish.yml).
 import { createGitHub } from './github.js';
-import { REPO } from './config.js';
 import { LIMITS, STATUS_LABELS, EDITABLE_STATUSES, validatePost, countHashtags, ratioOutOfFeedRange, newId, addEvent } from './rules.js';
 
 // ---------------------------------------------------------------- utilidades
@@ -56,46 +55,59 @@ function toast(message, type = 'ok') {
 
 function readStorage(key) {
   try {
-    return JSON.parse(localStorage.getItem(key) || sessionStorage.getItem(key) || 'null');
+    return JSON.parse(localStorage.getItem(key) || 'null');
   } catch {
     return null;
   }
 }
-function writeStorage(key, value, persist = true) {
-  try {
-    localStorage.removeItem(key);
-    sessionStorage.removeItem(key);
-    if (value !== null) (persist ? localStorage : sessionStorage).setItem(key, JSON.stringify(value));
-  } catch {
-    /* armazenamento bloqueado */
-  }
-}
 
-// ---------------------------------------------------------------- sessão e repositório
-const dev = readStorage('postly.dev') || {}; // permite apontar para uma API de testes
-let session = readStorage('postly.session');
+// ---------------------------------------------------------------- servidor (funções da Vercel)
+const dev = readStorage('postly.dev') || {}; // apenas para testes locais
 let gh = null;
 const store = { accounts: [], posts: [] };
 
-function detectRepo() {
-  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
-  if (!m) return REPO.owner && REPO.repo ? REPO : null;
-  const first = location.pathname.split('/').filter(Boolean)[0];
-  return { owner: m[1], repo: first || `${m[1]}.github.io` };
+async function api(path, { method = 'GET', body } = {}) {
+  const res = await fetch(`/api/${path}`, {
+    method,
+    headers: { 'x-postly': '1', ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.message || data.error || `Erro ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
 }
 
-function pagesBase() {
-  if (dev.pagesBase) return dev.pagesBase;
-  const owner = gh.owner.toLowerCase();
-  return gh.repo.toLowerCase() === `${owner}.github.io` ? `https://${owner}.github.io` : `https://${owner}.github.io/${gh.repo}`;
-}
 function mediaSrc(m) {
   if (m.previewUrl) return m.previewUrl;
-  // Imagens: raw.githubusercontent.com (fica disponível na hora). Vídeos: GitHub Pages.
-  if (m.kind === 'image') {
-    return dev.rawBase ? `${dev.rawBase}/${m.path}` : `https://raw.githubusercontent.com/${gh.owner}/${gh.repo}/${gh.branch}/${m.path}`;
+  if (m.url) return m.url;
+  // Posts antigos com mídia guardada no repositório.
+  return `https://raw.githubusercontent.com/${gh.owner}/${gh.repo}/${gh.branch}/${m.path}`;
+}
+
+// Envia a mídia direto do navegador para o Vercel Blob (aceita arquivos grandes).
+async function uploadMedia(blob, ext, onProgress) {
+  const pathname = `postly/${newId()}${ext}`;
+  if (dev.mockUpload) {
+    const res = await fetch(`/dev/upload?name=${encodeURIComponent(pathname)}`, { method: 'POST', body: blob });
+    onProgress(1);
+    return (await res.json()).url;
   }
-  return `${pagesBase()}/${m.path}`;
+  const { upload } = await import('./vendor/vercel-blob-client.mjs');
+  const result = await upload(pathname, blob, {
+    access: 'public',
+    handleUploadUrl: '/api/upload',
+    headers: { 'x-postly': '1' },
+    contentType: blob.type || (ext === '.mov' ? 'video/quicktime' : ext === '.mp4' ? 'video/mp4' : 'image/jpeg'),
+    multipart: blob.size > 20 * 1024 * 1024,
+    onUploadProgress: (e) => onProgress(e.percentage / 100),
+  });
+  return result.url;
 }
 
 async function reload() {
@@ -111,12 +123,37 @@ function postFile(id) {
 }
 
 // Mídias que não são usadas por nenhum outro post podem ser apagadas junto.
-function orphanMedia(paths, exceptPostIds) {
-  const used = new Set(store.posts.filter((p) => !exceptPostIds.includes(p.id)).flatMap((p) => (p.media || []).map((m) => m.path)));
-  return [...new Set(paths)].filter((p) => !used.has(p) && p.startsWith('data/media/'));
+const mediaKey = (m) => m.url || m.path;
+function orphanMedia(media, exceptPostIds) {
+  const used = new Set(store.posts.filter((p) => !exceptPostIds.includes(p.id)).flatMap((p) => (p.media || []).map(mediaKey)));
+  const seen = new Set();
+  return media.filter((m) => {
+    const k = mediaKey(m);
+    if (!k || used.has(k) || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+// Apaga do repositório (mídias antigas) ou do Vercel Blob.
+const repoDeletes = (media) => media.filter((m) => !m.url && m.path?.startsWith('data/media/')).map((m) => ({ path: m.path, delete: true }));
+async function deleteBlobs(media) {
+  const urls = media.filter((m) => m.url).map((m) => m.url);
+  if (!urls.length) return;
+  try {
+    await api('media', { method: 'DELETE', body: { urls } });
+  } catch {
+    // não é grave: só ocupa espaço
+  }
 }
 
-const cleanMedia = (m) => ({ path: m.path, kind: m.kind, width: m.width ?? null, height: m.height ?? null, name: m.name ?? null, size: m.size ?? null });
+const cleanMedia = (m) => ({
+  ...(m.url ? { url: m.url } : { path: m.path }),
+  kind: m.kind,
+  width: m.width ?? null,
+  height: m.height ?? null,
+  name: m.name ?? null,
+  size: m.size ?? null,
+});
 
 function dueSoon(iso) {
   return iso && new Date(iso).getTime() <= Date.now() + 4 * 60e3;
@@ -132,16 +169,17 @@ async function triggerPublisher() {
 
 async function savePosts({ editingId, accountIds, type, caption, media, shareToFeed, status, scheduledAt }) {
   const now = new Date().toISOString();
-  const newMedia = media.filter((m) => m.isNew).map((m) => ({ path: m.path, sha: m.sha }));
   const cleanList = media.map(cleanMedia);
+  let removedMedia = [];
 
   await gh.commit(editingId ? 'Postly: post editado' : 'Postly: novo post agendado', async (read) => {
-    const changes = [...newMedia];
+    const changes = [];
+    removedMedia = [];
     if (editingId) {
       const current = await read(postFile(editingId));
       if (!current) throw new Error('Este post não existe mais.');
       if (!EDITABLE_STATUSES.includes(current.status)) throw new Error('Este post já está sendo publicado e não pode ser editado.');
-      const removed = (current.media || []).map((m) => m.path).filter((p) => !media.some((m) => m.path === p));
+      const removed = (current.media || []).filter((old) => !media.some((m) => mediaKey(m) === mediaKey(old)));
       const post = {
         ...current,
         accountId: accountIds[0],
@@ -162,7 +200,8 @@ async function savePosts({ editingId, accountIds, type, caption, media, shareToF
       };
       addEvent(post, 'info', status === 'draft' ? 'Rascunho atualizado' : `Reagendado para ${fmtDateTime(scheduledAt)}`);
       changes.push({ path: postFile(editingId), json: post });
-      for (const p of orphanMedia(removed, [editingId])) changes.push({ path: p, delete: true });
+      removedMedia = orphanMedia(removed, [editingId]);
+      changes.push(...repoDeletes(removedMedia));
     } else {
       for (const accountId of accountIds) {
         const post = {
@@ -193,7 +232,7 @@ async function savePosts({ editingId, accountIds, type, caption, media, shareToF
     }
     return changes;
   });
-  if (newMedia.length) await gh.deploySite();
+  await deleteBlobs(removedMedia);
   if (status === 'scheduled' && dueSoon(scheduledAt)) await triggerPublisher();
 }
 
@@ -243,13 +282,15 @@ async function postAction(action, post) {
       toast('Agendamento cancelado.');
     } else if (action === 'delete') {
       if (!confirm(post.status === 'published' ? 'Remover do Postly? (O post continua no Instagram.)' : 'Excluir este post?')) return false;
+      let media = [];
       await gh.commit('Postly: post excluído', async (read) => {
         const p = await read(postFile(post.id));
         if (!p) return [];
         if (p.status === 'processing') throw new Error('Aguarde a publicação terminar para excluir.');
-        const media = orphanMedia((p.media || []).map((m) => m.path), [post.id]);
-        return [{ path: postFile(post.id), delete: true }, ...media.map((m) => ({ path: m, delete: true }))];
+        media = orphanMedia(p.media || [], [post.id]);
+        return [{ path: postFile(post.id), delete: true }, ...repoDeletes(media)];
       });
+      await deleteBlobs(media);
       toast('Post excluído.');
     }
     return true;
@@ -261,15 +302,6 @@ async function postAction(action, post) {
 
 // ---------------------------------------------------------------- mídia (processada no navegador)
 const VIDEO_EXT = { 'video/mp4': '.mp4', 'video/quicktime': '.mov' };
-
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(',')[1]);
-    r.onerror = () => reject(new Error('Não foi possível ler o arquivo.'));
-    r.readAsDataURL(blob);
-  });
-}
 
 // Converte imagens para JPEG (único formato aceito pela API), no máx. 1440 px de largura.
 async function prepareImage(file) {
@@ -311,7 +343,7 @@ async function prepareFile(file) {
   if (file.type.startsWith('image/')) return prepareImage(file);
   const ext = VIDEO_EXT[file.type];
   if (!ext) throw new Error(`Formato não suportado: ${file.name}. Use imagens (JPG/PNG/WEBP) ou vídeos MP4/MOV.`);
-  if (file.size > LIMITS.videoMaxBytes) throw new Error(`O vídeo "${file.name}" passa de 95 MB (limite de arquivo do GitHub).`);
+  if (file.size > LIMITS.videoMaxBytes) throw new Error(`O vídeo "${file.name}" passa de 300 MB (limite do Instagram).`);
   return { blob: file, ...(await videoSize(file)), ext, kind: 'video' };
 }
 
@@ -365,7 +397,7 @@ async function route() {
     else if (name === 'contas') await renderAccounts(view);
     else view.innerHTML = '<div class="empty"><h3>Página não encontrada</h3></div>';
   } catch (err) {
-    if (err.status === 401) return logout('Seu token do GitHub expirou ou foi revogado. Entre de novo.');
+    if (err.status === 401) return renderLogin('Sua sessão expirou. Entre de novo.');
     view.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
   window.scrollTo(0, 0);
@@ -679,7 +711,7 @@ function openPostModal(id, onChange) {
 // ---------------------------------------------------------------- editor
 const TYPE_INFO = {
   feed: { title: 'Feed', hint: '1 foto, ou carrossel com até 10 fotos/vídeos' },
-  reel: { title: 'Reels', hint: '1 vídeo vertical (9:16), até 95 MB' },
+  reel: { title: 'Reels', hint: '1 vídeo vertical (9:16), até 300 MB' },
   story: { title: 'Story', hint: '1 foto ou vídeo (até 60s), sem legenda' },
 };
 
@@ -760,7 +792,7 @@ function renderEditor(view, editId, query) {
           <div class="dropzone" id="drop" role="button" tabindex="0">
             ${ICONS.upload}
             <div><strong>Clique ou arraste arquivos aqui</strong></div>
-            <div class="small">Imagens JPG, PNG ou WEBP (convertidas para JPEG) · Vídeos MP4 ou MOV até 95 MB</div>
+            <div class="small">Imagens JPG, PNG ou WEBP (convertidas para JPEG) · Vídeos MP4 ou MOV até 300 MB</div>
           </div>
           <input type="file" id="file" multiple hidden>
           <div class="media-grid" id="media"></div>
@@ -895,12 +927,11 @@ function renderEditor(view, editId, query) {
           tile.previewUrl = URL.createObjectURL(prepared.blob);
           Object.assign(tile, { width: prepared.width, height: prepared.height, kind: prepared.kind, size: prepared.blob.size });
           renderMedia();
-          const base64 = await blobToBase64(prepared.blob);
-          tile.sha = await gh.uploadBlob(base64, (p) => {
+          tile.url = await uploadMedia(prepared.blob, prepared.ext, (p) => {
             tile.progress = p;
             renderMedia();
           });
-          Object.assign(tile, { path: `data/media/${newId()}${prepared.ext}`, isNew: true, uploading: false });
+          tile.uploading = false;
         } catch (err) {
           st.media = st.media.filter((x) => x !== tile);
           toast(err.message, 'error');
@@ -1095,16 +1126,18 @@ async function connectAccount(igToken, onStatus) {
 }
 
 async function removeAccount(acc) {
+  let media = [];
   await gh.commit(`Postly: conta @${acc.username} removida`, async (read) => {
     const accounts = (await read('data/accounts.json')) || [];
     const posts = store.posts.filter((p) => p.accountId === acc.id && p.status !== 'processing');
-    const media = orphanMedia(posts.flatMap((p) => (p.media || []).map((m) => m.path)), posts.map((p) => p.id));
+    media = orphanMedia(posts.flatMap((p) => p.media || []), posts.map((p) => p.id));
     return [
       { path: 'data/accounts.json', json: accounts.filter((a) => a.id !== acc.id) },
       ...posts.map((p) => ({ path: postFile(p.id), delete: true })),
-      ...media.map((m) => ({ path: m, delete: true })),
+      ...repoDeletes(media),
     ];
   });
+  await deleteBlobs(media);
   if (acc.secretName) await gh.deleteSecret(acc.secretName);
 }
 
@@ -1225,12 +1258,9 @@ async function renderAccounts(view) {
 
 async function renderSetup() {
   const el = $('#setup');
-  const [pages, runs, secretNames] = await Promise.all([
-    gh.pagesInfo(),
-    gh.latestRuns(1).catch(() => undefined),
-    gh.listSecretNames().catch(() => null),
-  ]);
-  if (!el.isConnected) return;
+  if (!el) return;
+  const [runs, secretNames] = await Promise.all([gh.latestRuns(1).catch(() => undefined), gh.listSecretNames().catch(() => null)]);
+  if (!el.isConnected) return; // o usuário já foi para outra tela
   const autoRefresh = secretNames?.includes('POSTLY_GH_TOKEN');
   const item = (ok, title, detail) => `
     <div class="row" style="align-items:flex-start;gap:12px">
@@ -1238,22 +1268,31 @@ async function renderSetup() {
       <div class="grow"><strong>${title}</strong><div class="muted small">${detail}</div></div>
     </div>`;
   el.innerHTML = [
-    item(Boolean(pages), 'GitHub Pages', pages ? `O site e as mídias estão em <a href="${esc(pages.html_url)}" target="_blank" rel="noopener">${esc(pages.html_url)}</a>. O Instagram baixa as mídias de lá.` : 'Ative em Settings › Pages do repositório (Deploy from a branch).'),
-    item(runs !== null && runs !== undefined, 'GitHub Actions (publicador)', runs === null ? 'Workflow publish.yml não encontrado.' : runs === undefined ? 'O token precisa da permissão Actions (leitura e escrita).' : 'Roda a cada ~5 minutos e quando você publica algo.'),
+    item(
+      store.server.configured.blob,
+      'Armazenamento de fotos e vídeos (Vercel Blob)',
+      store.server.configured.blob
+        ? 'Conectado. O Instagram baixa as mídias de lá.'
+        : 'Não conectado: na Vercel, abra o projeto › Storage › Create › Blob e conecte ao projeto. Depois faça um Redeploy.',
+    ),
+    item(
+      runs !== null && runs !== undefined,
+      'Publicador (GitHub Actions)',
+      runs === null ? 'Workflow publish.yml não encontrado no repositório.' : runs === undefined ? 'O GITHUB_TOKEN da Vercel precisa da permissão Actions (Read and write).' : 'Roda a cada ~5 minutos e quando você publica algo.',
+    ),
     item(
       autoRefresh,
       'Renovação automática dos tokens do Instagram',
       autoRefresh
         ? 'Ativada. O publicador renova os tokens toda semana (eles duram 60 dias).'
-        : `Desativada: os tokens do Instagram expiram em 60 dias. Para o publicador renová-los sozinho, ele precisa de um token do GitHub com permissão de escrever secrets.
-           <div style="margin-top:8px"><button class="btn btn-sm" id="enable-refresh">Ativar usando meu token do GitHub</button></div>`,
+        : `Desativada: os tokens do Instagram expiram em 60 dias.
+           <div style="margin-top:8px"><button class="btn btn-sm" id="enable-refresh">Ativar renovação automática</button></div>`,
     ),
   ].join('');
   $('#enable-refresh')?.addEventListener('click', async (e) => {
-    if (!confirm('Seu token do GitHub será salvo como secret POSTLY_GH_TOKEN (criptografado) para o publicador renovar os tokens do Instagram. Continuar?')) return;
     e.target.disabled = true;
     try {
-      await gh.setSecret('POSTLY_GH_TOKEN', session.token);
+      await api('auto-refresh', { method: 'POST' });
       toast('Renovação automática ativada.');
       renderSetup();
     } catch (err) {
@@ -1264,78 +1303,86 @@ async function renderSetup() {
 }
 
 // ---------------------------------------------------------------- login
-function renderLogin(message) {
-  const detected = detectRepo();
-  const saved = readStorage('postly.session') || {};
+function loginShell(inner) {
   document.body.innerHTML = `
     <main class="login-page">
-      <form class="card login-card stack" id="login" style="width:min(460px,100%)">
+      <div class="card login-card stack" style="width:min(400px,100%)">
         <div class="brand" style="padding:0"><div class="brand-mark">P</div> Postly</div>
-        <div>
-          <h1 style="font-size:20px">Entrar</h1>
-          <p class="muted small" style="margin:4px 0 0">O Postly guarda os posts neste repositório do GitHub. Para entrar, use um token pessoal do GitHub com acesso ao repositório.</p>
-        </div>
-        <div class="row" style="gap:10px">
-          <label class="field grow">Dono <input class="input" name="owner" required value="${esc(saved.owner || detected?.owner || '')}"></label>
-          <label class="field grow">Repositório <input class="input" name="repo" required value="${esc(saved.repo || detected?.repo || '')}"></label>
-        </div>
-        <label class="field">Token do GitHub <input class="input" type="password" name="token" required autocomplete="off" placeholder="github_pat_…"></label>
-        <details class="small">
-          <summary style="cursor:pointer;font-weight:600">Como criar o token</summary>
-          <ol class="muted" style="padding-left:18px;margin:8px 0 0;display:grid;gap:4px">
-            <li>Abra <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a> (token <em>fine-grained</em>).</li>
-            <li>Em <em>Repository access</em>, escolha <em>Only select repositories</em> e selecione este repositório.</li>
-            <li>Em <em>Permissions › Repository permissions</em>, dê <strong>Read and write</strong> para: <strong>Contents</strong>, <strong>Actions</strong> e <strong>Secrets</strong>.</li>
-            <li>Gere o token e cole aqui. Ele fica salvo só neste navegador.</li>
-          </ol>
-        </details>
-        <label class="toggle small"><input type="checkbox" name="remember" checked> Lembrar neste navegador</label>
-        <div class="alert alert-danger ${message ? '' : 'hidden'}" id="err">${esc(message || '')}</div>
-        <button class="btn btn-primary" type="submit">Entrar</button>
-      </form>
+        ${inner}
+      </div>
     </main>
     <div class="toasts" id="toasts"></div>`;
+}
 
+function renderLogin(message) {
+  loginShell(`
+    <form class="stack" id="login">
+      <label class="field">Senha <input class="input" type="password" name="password" required autocomplete="current-password" autofocus></label>
+      <div class="alert alert-danger ${message ? '' : 'hidden'}" id="err">${esc(message || '')}</div>
+      <button class="btn btn-primary" type="submit">Entrar</button>
+    </form>`);
   $('#login').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const f = e.target;
-    const btn = f.querySelector('button[type=submit]');
+    const btn = e.target.querySelector('button');
     const err = $('#err');
     btn.disabled = true;
     err.classList.add('hidden');
-    const candidate = { owner: f.owner.value.trim(), repo: f.repo.value.trim(), token: f.token.value.trim() };
     try {
-      const client = createGitHub({ ...candidate, apiBase: dev.apiBase });
-      await client.verify();
-      writeStorage('postly.session', candidate, f.remember.checked);
+      await api('login', { method: 'POST', body: { password: e.target.password.value } });
       location.reload();
     } catch (ex) {
       err.textContent = ex.message;
       err.classList.remove('hidden');
       btn.disabled = false;
+      e.target.password.select();
     }
   });
 }
 
-function logout(message) {
-  writeStorage('postly.session', null);
-  session = null;
+// Mostrado quando faltam variáveis de ambiente na Vercel.
+function renderNotConfigured(cfg) {
+  const missing = [
+    !cfg.password && '<li><code>POSTLY_PASSWORD</code> — a senha que você vai usar para entrar no painel.</li>',
+    !cfg.github && `<li><code>GITHUB_TOKEN</code> — token do GitHub criado em
+      <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a>,
+      com acesso só ao repositório <strong>${esc(store.server.owner)}/${esc(store.server.repo)}</strong> e permissão <strong>Read and write</strong> em Contents, Actions e Secrets.</li>`,
+  ].filter(Boolean);
+  loginShell(`
+    <div>
+      <h1 style="font-size:20px">Falta configurar</h1>
+      <p class="muted small" style="margin:6px 0 0">Na Vercel, abra o projeto › <strong>Settings › Environment Variables</strong>, adicione:</p>
+    </div>
+    <ul class="small" style="margin:0;padding-left:18px;display:grid;gap:8px">${missing.join('')}</ul>
+    <p class="muted small" style="margin:0">Depois, em <strong>Deployments</strong>, clique em <strong>Redeploy</strong> e recarregue esta página.</p>`);
+}
+
+async function logout(message) {
+  await fetch('/api/logout', { method: 'POST', headers: { 'x-postly': '1' } }).catch(() => {});
   renderLogin(message);
 }
 
 // ---------------------------------------------------------------- inicialização
 async function boot() {
-  if (!session?.token) return renderLogin();
-  gh = createGitHub({ ...session, apiBase: dev.apiBase });
+  let server;
+  try {
+    server = await api('session');
+  } catch {
+    $('#view').innerHTML = '<div class="alert alert-danger">Não foi possível falar com o servidor. Recarregue a página.</div>';
+    return;
+  }
+  store.server = server;
+  if (!server.configured.password || !server.configured.github) return renderNotConfigured(server.configured);
+  if (!server.authenticated) return renderLogin();
+
+  gh = createGitHub({ owner: server.owner, repo: server.repo });
   try {
     await gh.verify();
   } catch (err) {
-    if (err.status === 401 || err.status === 403 || err.status === 404) return logout(err.message);
+    if (err.status === 401) return renderLogin();
     $('#view').innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
     return;
   }
-  $('#repo-name').textContent = `${gh.owner}/${gh.repo}`;
-  $('#logout').addEventListener('click', () => confirm('Sair deste navegador?') && logout());
+  $('#logout').addEventListener('click', () => confirm('Sair?') && logout());
   window.addEventListener('hashchange', route);
   route();
 }

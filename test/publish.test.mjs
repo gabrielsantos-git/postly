@@ -21,8 +21,9 @@ const realFetch = globalThis.fetch;
 before(() => {
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(url);
-    const params = init.body ? Object.fromEntries(new URLSearchParams(init.body)) : Object.fromEntries(u.searchParams);
-    const call = { method: init.method || 'GET', host: u.host, path: u.pathname, params };
+    const isJson = typeof init.body === 'string' && init.body.startsWith('{');
+    const params = init.body && !isJson ? Object.fromEntries(new URLSearchParams(init.body)) : Object.fromEntries(u.searchParams);
+    const call = { method: init.method || 'GET', host: u.host, path: u.pathname, params, body: isJson ? JSON.parse(init.body) : null };
     calls.push(call);
     const out = handler(call) ?? {};
     const status = out.__status ?? 200;
@@ -233,4 +234,36 @@ test('criptografia dos secrets no navegador (libsodium incluído no site)', asyn
   const kp = sodium.crypto_box_keypair();
   const sealed = sodium.crypto_box_seal(sodium.from_string('IGAA-token'), kp.publicKey);
   assert.equal(sodium.to_string(sodium.crypto_box_seal_open(sealed, kp.publicKey, kp.privateKey)), 'IGAA-token');
+});
+
+test('renova o token do Instagram e atualiza o secret no GitHub', async () => {
+  const { createRequire } = await import('node:module');
+  const sodium = createRequire(import.meta.url)('libsodium-wrappers');
+  await sodium.ready;
+  const kp = sodium.crypto_box_keypair();
+  let saved = null;
+  writeAccounts([{ ...ACCOUNT, tokenUpdatedAt: '2020-01-01T00:00:00Z' }]);
+  handler = (call) => {
+    if (call.path.endsWith('/refresh_access_token')) return { access_token: 'TOKEN-RENOVADO', expires_in: 5184000 };
+    if (call.path.endsWith('/secrets/public-key')) return { key_id: 'k1', key: sodium.to_base64(kp.publicKey, sodium.base64_variants.ORIGINAL) };
+    if (call.method === 'PUT' && call.path.endsWith('/secrets/IG_TOKEN_ABC')) {
+      saved = call;
+      return { __status: 201 };
+    }
+    return {};
+  };
+  process.env.POSTLY_GH_TOKEN = 'gh-token';
+  try {
+    await runPublish({ budgetMs: 0 });
+  } finally {
+    delete process.env.POSTLY_GH_TOKEN;
+  }
+  assert.ok(saved, 'o secret deveria ter sido atualizado');
+  assert.equal(saved.host, 'api.github.com');
+  const body = saved.body;
+  const plain = sodium.to_string(sodium.crypto_box_seal_open(sodium.from_base64(body.encrypted_value, sodium.base64_variants.ORIGINAL), kp.publicKey, kp.privateKey));
+  assert.equal(plain, 'TOKEN-RENOVADO');
+  const acc = readAccounts()[0];
+  assert.ok(new Date(acc.tokenUpdatedAt) > new Date('2025-01-01'));
+  assert.equal(acc.expiryEstimated, false);
 });
