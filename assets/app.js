@@ -1,6 +1,7 @@
 // Postly — site estático (GitHub Pages). Os dados ficam no repositório e a publicação
 // é feita pelo GitHub Actions (.github/workflows/publish.yml).
 import { createGitHub } from './github.js';
+import { REPO } from './config.js';
 import { LIMITS, STATUS_LABELS, EDITABLE_STATUSES, validatePost, countHashtags, ratioOutOfFeedRange, newId, addEvent } from './rules.js';
 
 // ---------------------------------------------------------------- utilidades
@@ -78,7 +79,7 @@ const store = { accounts: [], posts: [] };
 
 function detectRepo() {
   const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
-  if (!m) return null;
+  if (!m) return REPO.owner && REPO.repo ? REPO : null;
   const first = location.pathname.split('/').filter(Boolean)[0];
   return { owner: m[1], repo: first || `${m[1]}.github.io` };
 }
