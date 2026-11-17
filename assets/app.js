@@ -1342,7 +1342,6 @@ function renderLogin(message) {
 // Mostrado quando faltam variáveis de ambiente na Vercel.
 function renderNotConfigured(cfg) {
   const missing = [
-    !cfg.password && '<li><code>POSTLY_PASSWORD</code> — a senha que você vai usar para entrar no painel.</li>',
     !cfg.github && `<li><code>GITHUB_TOKEN</code> — token do GitHub criado em
       <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a>,
       com acesso só ao repositório <strong>${esc(store.server.owner)}/${esc(store.server.repo)}</strong> e permissão <strong>Read and write</strong> em Contents, Actions e Secrets.</li>`,
@@ -1371,7 +1370,7 @@ async function boot() {
     return;
   }
   store.server = server;
-  if (!server.configured.password || !server.configured.github) return renderNotConfigured(server.configured);
+  if (!server.configured.github) return renderNotConfigured(server.configured);
   if (!server.authenticated) return renderLogin();
 
   gh = createGitHub({ owner: server.owner, repo: server.repo });
@@ -1382,7 +1381,8 @@ async function boot() {
     $('#view').innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
     return;
   }
-  $('#logout').addEventListener('click', () => confirm('Sair?') && logout());
+  if (server.passwordRequired) $('#logout').addEventListener('click', () => confirm('Sair?') && logout());
+  else $('#logout').remove(); // painel sem senha: não há do que sair
   window.addEventListener('hashchange', route);
   route();
 }

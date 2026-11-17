@@ -1,10 +1,10 @@
 // Utilidades das funções da Vercel. Arquivos que começam com "_" não viram rotas.
 //
 // Variáveis de ambiente (Vercel › Settings › Environment Variables):
-//   POSTLY_PASSWORD        senha do painel
 //   GITHUB_TOKEN           token do GitHub (fine-grained) com Contents, Actions e Secrets: Read and write
 //   BLOB_READ_WRITE_TOKEN  criado automaticamente ao conectar um Blob Store ao projeto
 //   POSTLY_REPO            (opcional) "dono/repositorio"; padrão: o repositório ligado à Vercel
+//   POSTLY_PASSWORD        (opcional) se definida, o painel pede esta senha para entrar
 import crypto from 'node:crypto';
 
 const COOKIE = 'postly_session';
@@ -62,8 +62,10 @@ function cookies(req) {
   return out;
 }
 
+export const passwordRequired = () => Boolean(process.env.POSTLY_PASSWORD);
+
 export function isLoggedIn(req) {
-  if (!process.env.POSTLY_PASSWORD) return false;
+  if (!passwordRequired()) return true; // painel sem senha
   return verify(cookies(req)[COOKIE])?.sub === 'postly';
 }
 

@@ -4,7 +4,7 @@ Painel para **agendar publicações no Instagram**: feed (foto ou carrossel), Re
 
 | Parte | Onde roda | O que faz |
 |---|---|---|
-| Site (painel) + login | **Vercel** | Você entra com senha, agenda, edita e acompanha os posts |
+| Site (painel) | **Vercel** | Você agenda, edita e acompanha os posts |
 | Fotos e vídeos | **Vercel Blob** | Guarda as mídias; o Instagram baixa de lá |
 | Posts e contas | **Este repositório** | `data/posts/*.json` e `data/accounts.json` |
 | Publicador | **GitHub Actions** (`.github/workflows/publish.yml`) | A cada ~5 min publica no Instagram os posts cujo horário chegou |
@@ -15,7 +15,6 @@ Próxima etapa: integração com um número do [WhatsApp Business](https://devel
 
 ## Funcionalidades
 
-- **Login com senha**
 - **Várias contas do Instagram**, postar em várias de uma vez
 - **Feed** (1 foto ou carrossel de até 10 fotos/vídeos, com reordenação), **Reels** (com opção de aparecer no feed) e **Stories**
 - **Agendar**, **rascunhos**, **publicar agora**, **editar**, **cancelar** e **tentar de novo**
@@ -37,9 +36,8 @@ O site usa este token (guardado só na Vercel) para salvar os posts no repositó
 ### 2. Vercel
 No projeto da Vercel:
 
-1. **Settings › Environment Variables** — adicione:
-   - `POSTLY_PASSWORD` — a senha para entrar no painel
-   - `GITHUB_TOKEN` — o token do passo 1
+1. **Settings › Environment Variables** — adicione `GITHUB_TOKEN` com o token do passo 1.
+   - Opcional: `POSTLY_PASSWORD` faz o painel pedir uma senha. **Sem ela, qualquer pessoa com o link do site consegue usar o painel e publicar nas suas contas.**
 2. **Storage › Create › Blob** — crie um Blob Store e conecte ao projeto (isso cria `BLOB_READ_WRITE_TOKEN` sozinho).
 3. **Deployments › Redeploy** para aplicar.
 
@@ -64,7 +62,7 @@ Na aba **Actions** do repositório, deixe os workflows ativados. Na primeira exe
 
 ```
 index.html, assets/           site (servido pela Vercel)
-api/                          funções da Vercel: login, acesso ao GitHub, upload de mídia
+api/                          funções da Vercel: acesso ao GitHub, upload de mídia, senha opcional
 scripts/publish.mjs           publicador (roda no GitHub Actions)
 scripts/lib/                  API do Instagram e máquina de estados da publicação
 .github/workflows/publish.yml agenda do publicador

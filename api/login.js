@@ -2,7 +2,7 @@ import { checkPassword, configured, readBody, sendJson, setSessionCookie } from 
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return sendJson(res, 405, { message: 'Use POST.' });
-  if (!configured().password) return sendJson(res, 503, { message: 'Defina a variável POSTLY_PASSWORD na Vercel.' });
+  if (!configured().password) return sendJson(res, 200, { ok: true }); // painel sem senha
   const body = (await readBody(req).catch(() => null)) || {};
   if (!checkPassword(body.password)) {
     await new Promise((r) => setTimeout(r, 800)); // dificulta tentativas em massa
